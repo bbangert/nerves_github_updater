@@ -1,0 +1,47 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ELIXIR_VERSION: "1.20.2-otp-29"
+  OTP_VERSION: "29.0.3"
+  FWUP_VERSION: "1.15.0"
+
+jobs:
+  publish:
+    name: Publish to hex.pm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Install fwup
+        run: |
+          curl -fsSL "https://github.com/fwup-home/fwup/releases/download/v${FWUP_VERSION}/fwup_${FWUP_VERSION}_amd64.deb" -o /tmp/fwup.deb
+          sudo dpkg -i /tmp/fwup.deb || sudo apt-get install -f -y
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # Gate: a broken release must not publish. Includes the hardware/fwup
+      # integration tests, same as CI.
+      - name: Run tests (including hardware/fwup integration)
+        run: mix test --include hardware
+
+      - name: Publish to hex.pm
+        run: mix hex.publish --yes
+        env:
+          # HEX_API_KEY must be a key WITH PUBLISH SCOPE (hex.pm > Account >
+          # API keys > "Publish access" permission on the org/user that owns
+          # this package). A read-only or api-only key authenticates fine but
+          # fails cryptically at the publish step itself, not at login.
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
