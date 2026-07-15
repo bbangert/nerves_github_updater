@@ -38,10 +38,11 @@ jobs:
       - name: Fetch dependencies
         run: mix deps.get
 
-      # Gate: a broken release must not publish. Includes the hardware/fwup
-      # integration tests, same as CI.
-      - name: Run tests (including hardware/fwup integration)
-        run: mix test --include hardware
+      # Gate: a broken release must not publish. Excludes the :hardware
+      # fwup integration test (timing-sensitive on shared runners; see
+      # ci.yml), same as CI.
+      - name: Run tests
+        run: mix test
 
       - name: Publish to hex.pm
         run: mix hex.publish --yes
