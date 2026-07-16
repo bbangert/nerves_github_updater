@@ -140,19 +140,22 @@ defmodule NervesGithubUpdater.Fwup do
 
     receive do
       {^ref, result} ->
-        # The worker already sent its result and is exiting normally;
-        # reap the monitor's :DOWN so it doesn't linger in our mailbox.
-        receive do
-          {:DOWN, ^mon_ref, :process, ^pid, _reason} -> :ok
-        end
-
+        # Worker sent its result and is exiting normally; drop the monitor
+        # and flush the pending :DOWN so it doesn't linger in our mailbox.
+        Process.demonitor(mon_ref, [:flush])
         result
 
       {:DOWN, ^mon_ref, :process, ^pid, reason} ->
-        # Defensive: the worker died without sending a result. Shouldn't
-        # happen since it traps exits for the lifetime of the port, but
-        # don't let a surprise here propagate as a crash either.
-        {:error, {:fwup_crashed, reason}}
+        # BEAM signal ordering guarantees a message the worker sent before
+        # exiting is delivered before its :DOWN, so a real result is never
+        # missed by the clause above. Reaching here means the worker died
+        # without sending a result — but check once more with `after 0`
+        # so correctness doesn't hinge on the reader knowing that ordering.
+        receive do
+          {^ref, result} -> result
+        after
+          0 -> {:error, {:fwup_crashed, reason}}
+        end
     after
       30 * 60 * 1000 ->
         # Backstop beyond await_exit/3,4's own 30-minute receive
