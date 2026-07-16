@@ -67,7 +67,12 @@ defmodule NervesGithubUpdater.MixProject do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "guides/manifest-format.md", "CHANGELOG.md"],
+      extras: [
+        "README.md",
+        "guides/getting-started.md",
+        "guides/manifest-format.md",
+        "CHANGELOG.md"
+      ],
       groups_for_modules: [
         "Entry point": [
           NervesGithubUpdater,
