@@ -2,7 +2,7 @@
 
 [![Hex.pm](https://img.shields.io/hexpm/v/nerves_github_updater.svg)](https://hex.pm/packages/nerves_github_updater)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/nerves_github_updater)
-[![License](https://img.shields.io/hexpm/l/nerves_github_updater.svg)](https://github.com/bbangert/nerves_github_updater/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/bbangert/nerves_github_updater/blob/main/LICENSE)
 
 GitHub Releases OTA firmware updater for Nerves devices, with signed
 release manifests, per-target SHA-256 pinning, and rollback
