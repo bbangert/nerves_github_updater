@@ -68,9 +68,14 @@ defmodule NervesGithubUpdater.SignatureTest do
                Signature.verify_manifest("anything", <<0, 1, 2>>, pub)
     end
 
-    test "non-32-byte pubkey is refused" do
-      assert {:error, :missing_public_key} =
+    test "a 3-byte pubkey is refused as :invalid_public_key_size" do
+      assert {:error, :invalid_public_key_size} =
                Signature.verify_manifest("anything", <<0::size(64 * 8)>>, <<0, 1, 2>>)
+    end
+
+    test "a 16-byte pubkey is refused as :invalid_public_key_size" do
+      assert {:error, :invalid_public_key_size} =
+               Signature.verify_manifest("anything", <<0::size(64 * 8)>>, <<0::size(16 * 8)>>)
     end
   end
 end

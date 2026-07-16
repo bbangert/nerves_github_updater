@@ -513,6 +513,113 @@ defmodule NervesGithubUpdater.UpdaterTest do
       assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
       assert msg =~ "missing_manifest"
     end
+
+    test "manifest asset present but signature missing ⇒ :missing_manifest_signature error" do
+      manifest_asset = %{
+        name: @manifest_asset,
+        url: "https://example/#{@manifest_asset}",
+        browser_download_url: "https://example/#{@manifest_asset}",
+        size: 10
+      }
+
+      fw_asset = %{
+        name: "universal_proxy_rpi3.fw",
+        url: "https://example/universal_proxy_rpi3.fw",
+        browser_download_url: "https://example/universal_proxy_rpi3.fw",
+        size: 100
+      }
+
+      release = build_manifest_release(assets: [manifest_asset, fw_asset])
+      set_latest({:ok, release})
+
+      pid = start_updater(verification_required: true, target_fn: fn -> "rpi3" end)
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+      :ok = Updater.install_latest(pid)
+
+      assert_receive {:fw_update_progress, %{phase: :verifying}}, 500
+      assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
+      assert msg =~ "missing_manifest_signature"
+
+      refute_receive {:fwup_apply, _, _}, 100
+    end
+
+    test "signed manifest whose targets map lacks the device's target ⇒ {:target_not_found, _}" do
+      {pub, priv} = generate_keypair()
+      manifest_bytes = build_manifest_json(target: "rpi4", counter: 30)
+      sig_bytes = sign_manifest(manifest_bytes, priv)
+
+      set_asset(@manifest_asset, manifest_bytes)
+      set_asset(@manifest_sig_asset, sig_bytes)
+      set_latest({:ok, build_manifest_release()})
+
+      dir =
+        Path.join(
+          System.tmp_dir!(),
+          "updater_test_target_not_found_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+      fw_path = Path.join(dir, "firmware_pending.fw")
+
+      pid =
+        start_updater(
+          download_dir: dir,
+          verification_required: true,
+          public_key: pub,
+          target_fn: fn -> "rpi3" end
+        )
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+      :ok = Updater.install_latest(pid)
+
+      assert_receive {:fw_update_progress, %{phase: :verifying}}, 500
+      assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
+      assert msg =~ "target_not_found"
+
+      refute_receive {:client_download, _, ^fw_path, _}, 100
+    end
+
+    test "flash failure on the manifest path: phase ends :error, no counter persisted, no reboot" do
+      {pub, priv} = generate_keypair()
+      fw_content = "firmware bytes that will fail to flash"
+      manifest_bytes = build_manifest_json(fw_content: fw_content, counter: 42)
+      sig_bytes = sign_manifest(manifest_bytes, priv)
+
+      set_asset(@manifest_asset, manifest_bytes)
+      set_asset(@manifest_sig_asset, sig_bytes)
+      set_asset("firmware_pending.fw", fw_content)
+      :persistent_term.put({StubFwup, :result}, {:error, :flash_boom})
+
+      set_latest({:ok, build_manifest_release()})
+
+      test_pid = self()
+      kv_put = fn key, value -> send(test_pid, {:kv_put, key, value}) end
+      reboot_fn = fn -> send(test_pid, :rebooted) end
+
+      pid =
+        start_updater(
+          verification_required: true,
+          public_key: pub,
+          target_fn: fn -> "rpi3" end,
+          kv_put: kv_put,
+          reboot_fn: reboot_fn
+        )
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+      :ok = Updater.install_latest(pid)
+
+      assert_receive {:fw_update_progress, %{phase: :flashing}}, 500
+      assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
+      assert msg =~ "flash_boom"
+
+      refute_received {:kv_put, _, _}
+      refute_received :rebooted
+    end
   end
 
   describe "downgrade gate" do
