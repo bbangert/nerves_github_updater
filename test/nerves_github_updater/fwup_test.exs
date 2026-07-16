@@ -15,6 +15,72 @@ defmodule NervesGithubUpdater.FwupTest do
     end
   end
 
+  describe "port streaming (host-safe, fake fwup executable)" do
+    setup do
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "fwup_fake_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(tmp_dir)
+      on_exit(fn -> File.rm_rf(tmp_dir) end)
+
+      devpath = Path.join(tmp_dir, "dest.img")
+      File.touch!(devpath)
+
+      %{tmp_dir: tmp_dir, devpath: devpath}
+    end
+
+    test "returns :ok when fake fwup drains stdin and exits 0", %{
+      tmp_dir: tmp_dir,
+      devpath: devpath
+    } do
+      fwup_path = write_fake_fwup!(tmp_dir, "timeout 5 cat > /dev/null\nexit 0\n")
+      fw_path = write_tmp("small firmware payload")
+
+      assert :ok = Fwup.apply(fw_path, devpath: devpath, fwup_path: fwup_path)
+    end
+
+    test "returns {:error, {:fwup_exit, 1, _}} when fake fwup drains stdin and exits 1", %{
+      tmp_dir: tmp_dir,
+      devpath: devpath
+    } do
+      fwup_path = write_fake_fwup!(tmp_dir, "timeout 5 cat > /dev/null\nexit 1\n")
+      fw_path = write_tmp("small firmware payload")
+
+      assert {:error, {:fwup_exit, 1, _}} =
+               Fwup.apply(fw_path, devpath: devpath, fwup_path: fwup_path)
+    end
+
+    test "mid-stream fwup death (broken pipe) returns an error without crashing the caller", %{
+      tmp_dir: tmp_dir,
+      devpath: devpath
+    } do
+      # Fake fwup exits immediately, WITHOUT reading any of stdin. The
+      # real Fwup.apply/2 keeps writing a multi-MB .fw to the port after
+      # that — outpacing the fake's exit — so the write hits a closed
+      # read end (:epipe) partway through streaming. Before the fix,
+      # that mid-stream port death delivered an untrapped EXIT signal to
+      # the caller (this test process) and crashed it instead of
+      # returning an error tuple.
+      fwup_path = write_fake_fwup!(tmp_dir, "exit 0\n")
+      fw_path = write_big_fw!(tmp_dir, 16 * 1024 * 1024)
+
+      # Linked probe: if the port's mid-stream death ever escapes the
+      # isolated worker and reaches this (non-trapping) test process as
+      # a raw EXIT signal, the test process dies before the assertions
+      # below run, and — being linked — so would this probe.
+      probe = spawn_link(fn -> Process.sleep(5_000) end)
+
+      assert {:error, _reason} = Fwup.apply(fw_path, devpath: devpath, fwup_path: fwup_path)
+
+      # Reaching this line at all is the main proof: an untrapped EXIT
+      # signal would have killed this process before we got here.
+      assert Process.alive?(self())
+      assert Process.alive?(probe)
+
+      Process.exit(probe, :kill)
+    end
+  end
+
   describe "fwup integration (requires fwup on PATH)" do
     @describetag :hardware
 
@@ -70,6 +136,34 @@ defmodule NervesGithubUpdater.FwupTest do
     path = Path.join(System.tmp_dir!(), "fwup_test_#{System.unique_integer([:positive])}.fw")
     File.write!(path, content)
     on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  # Writes a fake fwup executable: a shell script whose behavior after
+  # the shebang is `body` (e.g. "timeout 5 cat > /dev/null\nexit 0\n").
+  # Used in place of the real fwup binary so the port-streaming path is
+  # host-safe to test — the fake never touches `devpath` or parses the
+  # framing protocol, it just consumes-or-not stdin and exits.
+  #
+  # A "drain stdin" fake must bound its read with `timeout`, not a bare
+  # `cat`: the Erlang Port keeps our write end of the pipe open until
+  # *after* it has already seen this process's exit status, so plain
+  # `cat` never observes a real EOF and hangs forever (the same
+  # EOF/exit ordering the moduledoc's "no --exit-handshake" note
+  # describes for real fwup, which sidesteps it by keying off the
+  # zero-length terminator frame instead of pipe EOF).
+  defp write_fake_fwup!(tmp_dir, body) do
+    path = Path.join(tmp_dir, "fake_fwup_#{System.unique_integer([:positive])}")
+    File.write!(path, "#!/usr/bin/env bash\n" <> body)
+    File.chmod!(path, 0o755)
+    path
+  end
+
+  # A multi-MB .fw big enough that streaming it out-races a fake fwup
+  # that exits without draining stdin, forcing a broken-pipe write.
+  defp write_big_fw!(tmp_dir, size) do
+    path = Path.join(tmp_dir, "big_#{System.unique_integer([:positive])}.fw")
+    File.write!(path, :crypto.strong_rand_bytes(size))
     path
   end
 end

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.1] - 2026-07-16
+
+### Fixed
+
+- Isolate the `fwup` port in a monitored worker process so an fwup
+  process that dies mid-stream (broken pipe / `:epipe`) surfaces as
+  `{:error, {:fwup_port_exit, reason}}` instead of propagating an exit
+  signal that crashes the caller. Adds host-safe unit coverage for the
+  port-streaming path via a fake fwup executable.
+- `Updater.state/1` and `update_config/2` no longer crash a caller that
+  polls during a long check/install (the loop blocks by design): they
+  return a busy snapshot / `{:error, :busy}` on call timeout.
+- Bound the manifest (4 MiB) and signature (64 KiB) downloads so an
+  oversized pre-verification asset can't exhaust device memory.
+
+### Changed
+
+- `Signature.verify_manifest/3` returns `:invalid_public_key_size`
+  (distinct from `:missing_public_key`) for a wrong-length key.
+- Drop the unused `nerves_runtime` dependency — KV/reboot/target are all
+  opts-injected — which also removes the `libmnl` build requirement in CI.
+- Bump `aws-actions/configure-aws-credentials` and `actions/cache` to v6.
+
 ## [0.1.0] - 2026-07-16
 
 ### Added

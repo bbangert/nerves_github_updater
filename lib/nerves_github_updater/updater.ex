@@ -30,6 +30,14 @@ defmodule NervesGithubUpdater.Updater do
   snapshot mid-install therefore sees a stale `pct` for the brief
   window until the next PubSub event lands and corrects it.
 
+  That same blocked-for-minutes `handle_info/2` also means a `state/1`
+  or `update_config/2` call arriving mid-install would otherwise sit on
+  the default 5s `GenServer.call` timeout and crash the caller. Both
+  catch that timeout internally: `state/1` returns a synthetic busy
+  snapshot (`phase: :installing`) instead of the real one, and
+  `update_config/2` returns `{:error, :busy}` — reads never block on a
+  long-running install. See the @doc on each function.
+
   ## Conditional verification
 
   When opts `:verification_required` is `false` (v1 default), the
@@ -132,6 +140,15 @@ defmodule NervesGithubUpdater.Updater do
   @manifest_sig_asset "release-manifest.sig"
   @counter_key "fw_manifest_counter"
 
+  # Pre-verification RAM ceilings for the two manifest-path support
+  # assets — both are read fully into memory and sha512'd BEFORE
+  # signature verification, so they must not inherit the 256 MiB
+  # firmware size floor `GithubClient.download_asset/3` otherwise
+  # applies. 4 MiB is generous for JSON; 64 KiB is generous for a
+  # 64-byte raw Ed25519 signature.
+  @manifest_max_bytes 4 * 1024 * 1024
+  @manifest_sig_max_bytes 64 * 1024
+
   @mutable_keys [
     :owner_repo,
     :github_token,
@@ -191,22 +208,45 @@ defmodule NervesGithubUpdater.Updater do
     GenServer.call(server, :install_latest)
   end
 
-  @doc "Synchronous snapshot for a subscriber's initial render."
+  @doc """
+  Synchronous snapshot for a subscriber's initial render.
+
+  `check/1`/`install_latest/1` run inside a single `handle_info/2` that
+  blocks the GenServer for the duration (minutes, for a flash) — a
+  caller polling `state/1` for progress must not crash because of that.
+  If the call would exceed the default `GenServer.call` timeout, this
+  returns a synthetic busy snapshot — same keys as the real snapshot,
+  `phase: :installing` — instead of raising. Any other `:exit` (e.g.
+  the server isn't running) returns an idle-shaped snapshot rather than
+  masquerading as "installing".
+  """
   @spec state(GenServer.server()) :: map()
   def state(server \\ __MODULE__) do
     GenServer.call(server, :state)
+  catch
+    :exit, {:timeout, {GenServer, :call, _}} -> busy_snapshot()
+    :exit, _reason -> idle_snapshot()
   end
 
   @doc """
   Update mutable opts. Takes effect for the **next** check/install —
   in-flight operations continue with the opts they started with.
 
-  Returns `:ok | {:error, :immutable | :unknown}`.
+  Like `state/1`, this never blocks on a long-running install: a call
+  timeout (the server busy inside `handle_info/2`) returns
+  `{:error, :busy}` rather than crashing the caller. Any other `:exit`
+  (e.g. the server isn't running) returns
+  `{:error, {:updater_unavailable, reason}}`.
+
+  Returns `:ok | {:error, :immutable | :unknown | :busy | {:updater_unavailable, term()}}`.
   """
   @spec update_config(GenServer.server(), keyword()) ::
-          :ok | {:error, :immutable | :unknown}
+          :ok | {:error, :immutable | :unknown | :busy | {:updater_unavailable, term()}}
   def update_config(server \\ __MODULE__, updates) when is_list(updates) do
     GenServer.call(server, {:update_config, updates})
+  catch
+    :exit, {:timeout, {GenServer, :call, _}} -> {:error, :busy}
+    :exit, reason -> {:error, {:updater_unavailable, reason}}
   end
 
   # -- Server Callbacks --
@@ -399,8 +439,22 @@ defmodule NervesGithubUpdater.Updater do
              find_release_asset(release.assets, @manifest_asset, :missing_manifest),
            {:ok, sig_asset} <-
              find_release_asset(release.assets, @manifest_sig_asset, :missing_manifest_signature),
-           :ok <- download_support_asset(client, manifest_asset, manifest_path, opts),
-           :ok <- download_support_asset(client, sig_asset, sig_path, opts),
+           :ok <-
+             download_support_asset(
+               client,
+               manifest_asset,
+               manifest_path,
+               opts,
+               @manifest_max_bytes
+             ),
+           :ok <-
+             download_support_asset(
+               client,
+               sig_asset,
+               sig_path,
+               opts,
+               @manifest_sig_max_bytes
+             ),
            {:ok, manifest_bytes} <- File.read(manifest_path),
            {:ok, sig_bytes} <- File.read(sig_path),
            :ok <- sig_mod.verify_manifest(manifest_bytes, sig_bytes, pubkey),
@@ -468,10 +522,13 @@ defmodule NervesGithubUpdater.Updater do
     end
   end
 
-  defp download_support_asset(client, asset, path, opts) do
+  defp download_support_asset(client, asset, path, opts, max_bytes) do
     client.download_asset(asset_url(asset), path,
       # See asset_url/1 — no bearer on the public download URL.
+      # max_bytes caps pre-verification RAM: the manifest and sig are
+      # File.read fully + hashed/verified before either is trusted.
       expected_size: Map.get(asset, :size, 0),
+      max_bytes: max_bytes,
       progress: fn _ -> :ok end,
       req_options: Map.get(opts, :req_options) || []
     )
@@ -560,6 +617,35 @@ defmodule NervesGithubUpdater.Updater do
       last_error: state.last_error,
       last_release: state.last_release,
       verification_required: Map.get(state.opts, :verification_required, false)
+    }
+  end
+
+  # `state/1`'s busy return when a call times out mid-install — the
+  # server is blocked inside `handle_info/2` so `state.opts` can't be
+  # read; `verification_required` defaults to `false` rather than
+  # reflecting the in-flight install's actual config.
+  defp busy_snapshot do
+    %{
+      phase: :installing,
+      pct: nil,
+      message: "Installing…",
+      last_error: nil,
+      last_release: nil,
+      verification_required: false
+    }
+  end
+
+  # `state/1`'s return for any non-timeout `:exit` (e.g. `:noproc`) —
+  # shaped like a fresh `:idle` server rather than the busy snapshot,
+  # since the process isn't actually mid-install.
+  defp idle_snapshot do
+    %{
+      phase: :idle,
+      pct: nil,
+      message: nil,
+      last_error: nil,
+      last_release: nil,
+      verification_required: false
     }
   end
 

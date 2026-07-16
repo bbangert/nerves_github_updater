@@ -36,6 +36,17 @@ defmodule NervesGithubUpdater.Fwup do
   fwup process against `devpath`; concurrent applies to the same
   device are undefined.
 
+  ## Isolation from port death
+
+  The Erlang Port is opened and owned by an isolated `spawn_monitor`
+  worker, not by the calling process. If the fwup OS process dies
+  mid-stream (broken pipe / `:epipe` — bad `.fw`, disk full, early
+  exit), the linked port delivers an EXIT signal only to that worker
+  (which traps exits), never to the caller. The caller only ever
+  receives the worker's `{ref, result}` message or, if the worker
+  itself crashes unexpectedly, a `:DOWN` message — both are folded
+  into the documented `:ok | {:error, term()}` contract.
+
   ## Accepted risks
 
   - No `--exit-handshake` (see above) — the final `ER` text can race
@@ -45,6 +56,12 @@ defmodule NervesGithubUpdater.Fwup do
     stderr line could theoretically desynchronize frame parsing or
     stall it. Accepted because fwup in framing mode keeps stderr quiet
     in practice.
+  - A mid-stream fwup death no longer crashes the caller: it is
+    surfaced as `{:error, {:fwup_port_exit, reason}}` (trapped exit
+    signal from the dying port) or `{:error, :fwup_port_closed}`
+    (write attempted after the port was already gone), because the
+    port itself is owned by an isolated monitored worker (see above)
+    rather than by the caller.
   """
 
   require Logger
@@ -100,7 +117,53 @@ defmodule NervesGithubUpdater.Fwup do
         {:error, {:firmware_not_found, fw_path}}
 
       true ->
-        open_and_apply(fwup, fw_path, devpath, task, progress, chunk_size, extra_args)
+        run_isolated(fwup, fw_path, devpath, task, progress, chunk_size, extra_args)
+    end
+  end
+
+  # Runs the port-owning work in a dedicated spawn_monitor worker, never
+  # linked to the caller. The Erlang Port is opened (and linked) inside
+  # that worker, so if fwup dies mid-stream the resulting EXIT signal
+  # reaches only the worker — which traps exits — never this process.
+  # The worker reports back via `{ref, result}`; this process just waits
+  # on that, reaps the worker's own :DOWN, and returns the result.
+  defp run_isolated(fwup, fw_path, devpath, task, progress, chunk_size, extra_args) do
+    parent = self()
+    ref = make_ref()
+
+    {pid, mon_ref} =
+      spawn_monitor(fn ->
+        Process.flag(:trap_exit, true)
+        result = open_and_apply(fwup, fw_path, devpath, task, progress, chunk_size, extra_args)
+        send(parent, {ref, result})
+      end)
+
+    receive do
+      {^ref, result} ->
+        # Worker sent its result and is exiting normally; drop the monitor
+        # and flush the pending :DOWN so it doesn't linger in our mailbox.
+        Process.demonitor(mon_ref, [:flush])
+        result
+
+      {:DOWN, ^mon_ref, :process, ^pid, reason} ->
+        # BEAM signal ordering guarantees a message the worker sent before
+        # exiting is delivered before its :DOWN, so a real result is never
+        # missed by the clause above. Reaching here means the worker died
+        # without sending a result — but check once more with `after 0`
+        # so correctness doesn't hinge on the reader knowing that ordering.
+        receive do
+          {^ref, result} -> result
+        after
+          0 -> {:error, {:fwup_crashed, reason}}
+        end
+    after
+      30 * 60 * 1000 ->
+        # Backstop beyond await_exit/3,4's own 30-minute receive
+        # timeout: covers a worker wedged before it even reaches that
+        # receive (e.g. blocked forever inside a Port.command/2 write).
+        Process.demonitor(mon_ref, [:flush])
+        Process.exit(pid, :kill)
+        {:error, :fwup_timeout}
     end
   end
 
@@ -191,6 +254,13 @@ defmodule NervesGithubUpdater.Fwup do
 
       {^port, {:exit_status, n}} ->
         {:error, {:fwup_exit, n, buffer}}
+
+      {:EXIT, ^port, reason} ->
+        # Trapped exit signal from the linked port dying mid-stream
+        # (e.g. :epipe when fwup's OS process exits early). Only
+        # reachable here because the caller of open_and_apply/7 traps
+        # exits for the port's lifetime (see run_isolated/7).
+        {:error, {:fwup_port_exit, reason}}
     after
       30 * 60 * 1000 ->
         {:error, :fwup_timeout}
@@ -218,6 +288,10 @@ defmodule NervesGithubUpdater.Fwup do
 
       {^port, {:exit_status, n}} ->
         {:error, {:fwup_exit, n, last_error}}
+
+      {:EXIT, ^port, reason} ->
+        # See await_exit/3's matching clause.
+        {:error, {:fwup_port_exit, reason}}
     after
       30 * 60 * 1000 ->
         {:error, :fwup_timeout}

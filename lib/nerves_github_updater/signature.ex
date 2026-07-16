@@ -22,7 +22,10 @@ defmodule NervesGithubUpdater.Signature do
   A 32-byte all-zero public key is the "no key provisioned yet"
   sentinel. `verify_manifest/3` refuses to validate against it,
   returning `{:error, :missing_public_key}` — fails closed instead of
-  silently accepting any signature.
+  silently accepting any signature. That's a distinct failure from a
+  provisioned key of the wrong size (`{:error,
+  :invalid_public_key_size}`) — one means "nothing to check against",
+  the other means "something's misconfigured upstream".
 
   ## Manifest signature scheme
 
@@ -58,12 +61,20 @@ defmodule NervesGithubUpdater.Signature do
   Returns `:ok`, `{:error, :invalid_signature}`, or one of the
   pre-flight errors:
 
-    * `{:error, :missing_public_key}` — `pubkey_bin` is `nil`, not
-      32 bytes, or the all-zero placeholder.
+    * `{:error, :missing_public_key}` — `pubkey_bin` is `nil` or the
+      all-zero 32-byte placeholder — "no key provisioned", fail closed.
+    * `{:error, :invalid_public_key_size}` — `pubkey_bin` is a
+      non-`nil` value that isn't a 32-byte binary — a provisioned key
+      that's the wrong shape, distinct from "no key at all".
     * `{:error, :invalid_signature_size}` — `sig` is not 64 bytes.
   """
   @spec verify_manifest(binary(), binary(), binary() | nil) ::
-          :ok | {:error, :missing_public_key | :invalid_signature | :invalid_signature_size}
+          :ok
+          | {:error,
+             :missing_public_key
+             | :invalid_public_key_size
+             | :invalid_signature
+             | :invalid_signature_size}
   def verify_manifest(_manifest_bytes, _sig, nil), do: {:error, :missing_public_key}
 
   def verify_manifest(manifest_bytes, sig, pubkey_bin)
@@ -83,7 +94,7 @@ defmodule NervesGithubUpdater.Signature do
     end
   end
 
-  def verify_manifest(_manifest_bytes, _sig, _pubkey), do: {:error, :missing_public_key}
+  def verify_manifest(_manifest_bytes, _sig, _pubkey), do: {:error, :invalid_public_key_size}
 
   defp validate_sig_size(<<_::binary-size(@sig_size)>>), do: :ok
   defp validate_sig_size(_), do: {:error, :invalid_signature_size}
