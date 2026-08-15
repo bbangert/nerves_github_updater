@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.2.0] - 2026-08-15
+
+### Changed
+
+- **Installing the version already running is now refused.** The version
+  gate gated only `:lt`, so an `:eq` comparison fell through and
+  re-downloaded, re-flashed and rebooted into the same firmware. That
+  achieves nothing while costing a download, a flash-cycle of wear and a
+  reboot — and it is a replay vector, because the busy guard rejects only
+  *concurrent* installs and never repeats, so any caller able to reach
+  `install_latest/1` could loop a device indefinitely. `:eq` now fails as
+  `{:reinstall_refused, tag}`.
+
+  Set the new `:allow_reinstall` opt (default `false`) to keep the old
+  behaviour, or for a deliberate re-flash such as recovering a corrupted
+  partition. It is a mutable opt, so `update_config/2` can flip it at
+  runtime like `:allow_downgrade`. `:gt`, `:missing` and `:incomparable`
+  are unaffected.
+
+  This is a behaviour change for anyone relying on same-version
+  reinstall, hence the minor bump.
+
 ## [0.1.1] - 2026-07-16
 
 ### Fixed
