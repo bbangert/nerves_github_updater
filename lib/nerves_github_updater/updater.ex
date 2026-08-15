@@ -60,7 +60,16 @@ defmodule NervesGithubUpdater.Updater do
   counter (see below) is the primary rollback control and is the only
   check that applies on the manifest path; this semver check also
   guards the legacy (unverified) path, which has no counter at all.
-  `:gt`, `:eq`, `:missing`, and `:incomparable` all proceed.
+
+  An `:eq` result (the release already running) is refused unless
+  `:allow_reinstall` is `true`. Re-flashing the running version achieves
+  nothing but costs a download, flash wear and a reboot — and leaving it
+  open is a replay vector, since the busy guard rejects only *concurrent*
+  installs and never repeats, so any caller that can reach
+  `install_latest/1` could loop the device indefinitely. Set
+  `:allow_reinstall` when a deliberate re-flash is wanted (recovering a
+  corrupted partition, say). `:gt`, `:missing` and `:incomparable`
+  proceed.
 
   ## Manifest verification
 
@@ -98,6 +107,8 @@ defmodule NervesGithubUpdater.Updater do
     * `:channel` (default `:stable`) — forwarded to
       `client.latest_release/2`; `:stable` or `:prerelease`.
     * `:allow_downgrade` (default `false`) — see "Downgrade gate".
+    * `:allow_reinstall` (default `false`) — allow re-flashing the version
+      already running; see "Downgrade gate".
     * `:enforce_expiry` (default `false`) — see "Manifest verification".
     * `:kv_get` — `(String.t() -> String.t() | nil)`, reads the
       persisted counter anchor. Missing ⇒ `fn _ -> nil end` (no
@@ -162,6 +173,7 @@ defmodule NervesGithubUpdater.Updater do
     :devpath_fn,
     :channel,
     :allow_downgrade,
+    :allow_reinstall,
     :enforce_expiry,
     :kv_get,
     :kv_put,
@@ -362,10 +374,20 @@ defmodule NervesGithubUpdater.Updater do
   def handle_info({:do_install, opts, release}, state) do
     current = current_version_fn(opts).()
     allow_downgrade = Map.get(opts, :allow_downgrade, false)
+    allow_reinstall = Map.get(opts, :allow_reinstall, false)
 
     case VersionCompare.compare(release.tag_name, current) do
       :lt when not allow_downgrade ->
         reason = {:downgrade_refused, release.tag_name, current}
+        {:noreply, fail(state, "Install failed: #{format_error(reason)}", reason)}
+
+      # Re-flashing the version already running is a no-op that still costs a
+      # download, a flash-cycle of wear and a reboot. Left open it is also a
+      # replay vector: anything able to reach install_latest/1 can loop the
+      # device indefinitely, because the busy guard rejects only *concurrent*
+      # installs, never repeats.
+      :eq when not allow_reinstall ->
+        reason = {:reinstall_refused, release.tag_name}
         {:noreply, fail(state, "Install failed: #{format_error(reason)}", reason)}
 
       _ ->

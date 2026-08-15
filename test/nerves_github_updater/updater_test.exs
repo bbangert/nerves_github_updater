@@ -622,6 +622,73 @@ defmodule NervesGithubUpdater.UpdaterTest do
     end
   end
 
+  describe "reinstall gate" do
+    test "refuses re-flashing the running version by default" do
+      set_latest({:ok, build_release(tag: "v1.0.0")})
+      pid = start_updater(verification_required: false, current_version_fn: fn -> "1.0.0" end)
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+      :ok = Updater.install_latest(pid)
+
+      assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
+      assert msg =~ "reinstall_refused"
+      refute_receive {:fwup_apply, _, _}, 100
+    end
+
+    # The replay vector: the busy guard rejects only *concurrent* installs,
+    # so without this gate a caller able to reach install_latest/1 could
+    # loop install → reboot indefinitely.
+    test "repeated installs of the running version never reach fwup" do
+      set_latest({:ok, build_release(tag: "v1.0.0")})
+      pid = start_updater(verification_required: false, current_version_fn: fn -> "1.0.0" end)
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+
+      for _ <- 1..3 do
+        :ok = Updater.install_latest(pid)
+        assert_receive {:fw_update_progress, %{phase: :error, message: msg}}, 500
+        assert msg =~ "reinstall_refused"
+      end
+
+      refute_receive {:fwup_apply, _, _}, 100
+    end
+
+    test "allow_reinstall: true proceeds" do
+      set_latest({:ok, build_release(tag: "v1.0.0")})
+
+      pid =
+        start_updater(
+          verification_required: false,
+          current_version_fn: fn -> "1.0.0" end,
+          allow_reinstall: true
+        )
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok = Updater.install_latest(pid)
+        assert_receive {:fw_update_progress, %{phase: :flashing}}, 500
+        assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+      end)
+    end
+
+    test "a newer release is unaffected by the reinstall gate" do
+      set_latest({:ok, build_release(tag: "v2.0.0")})
+      pid = start_updater(verification_required: false, current_version_fn: fn -> "1.0.0" end)
+
+      :ok = Updater.check(pid)
+      assert_receive {:fw_update_progress, %{phase: :idle}}, 500
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        :ok = Updater.install_latest(pid)
+        assert_receive {:fw_update_progress, %{phase: :flashing}}, 500
+      end)
+    end
+  end
+
   describe "downgrade gate" do
     test "refuses a downgrade by default (legacy path)" do
       set_latest({:ok, build_release(tag: "v1.0.0")})
