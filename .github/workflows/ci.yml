@@ -10,6 +10,38 @@ env:
   FWUP_VERSION: "1.15.0"
 
 jobs:
+  compile:
+    name: Compile · Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache deps and _build
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-compile-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-compile-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -40,12 +72,6 @@ jobs:
 
       - name: Fetch dependencies
         run: mix deps.get
-
-      - name: Compile (warnings as errors)
-        run: mix compile --warnings-as-errors
-
-      - name: Check formatting
-        run: mix format --check-formatted
 
       # The :hardware-tagged fwup integration test spawns the real fwup
       # binary and streams a trivially small .fw; on fast runners fwup
@@ -116,6 +142,37 @@ jobs:
 
       - name: Run credo
         run: mix credo --strict
+
+  sobelow:
+    name: Sobelow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache deps and _build
+        uses: actions/cache@v6
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-sobelow-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ env.ELIXIR_VERSION }}-${{ env.OTP_VERSION }}-sobelow-
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      # Not a Phoenix app: sobelow skips the router checks and scans the
+      # rest (file/traversal, crypto, config, etc.).
+      - name: Run sobelow
+        run: mix sobelow --skip --exit --threshold medium
 
   audit:
     name: Dependency audit
