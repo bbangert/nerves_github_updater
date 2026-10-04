@@ -82,19 +82,21 @@ defmodule NervesGithubUpdater.Signature do
     if pubkey_bin == placeholder_pubkey() do
       {:error, :missing_public_key}
     else
-      with :ok <- validate_sig_size(sig) do
-        digest = :crypto.hash(:sha512, manifest_bytes)
-
-        if :crypto.verify(:eddsa, :none, digest, sig, [pubkey_bin, :ed25519]) do
-          :ok
-        else
-          {:error, :invalid_signature}
-        end
-      end
+      with :ok <- validate_sig_size(sig), do: verify_digest(manifest_bytes, sig, pubkey_bin)
     end
   end
 
   def verify_manifest(_manifest_bytes, _sig, _pubkey), do: {:error, :invalid_public_key_size}
+
+  defp verify_digest(manifest_bytes, sig, pubkey_bin) do
+    digest = :crypto.hash(:sha512, manifest_bytes)
+
+    if :crypto.verify(:eddsa, :none, digest, sig, [pubkey_bin, :ed25519]) do
+      :ok
+    else
+      {:error, :invalid_signature}
+    end
+  end
 
   defp validate_sig_size(<<_::binary-size(@sig_size)>>), do: :ok
   defp validate_sig_size(_), do: {:error, :invalid_signature_size}

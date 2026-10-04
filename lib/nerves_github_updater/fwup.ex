@@ -178,9 +178,8 @@ defmodule NervesGithubUpdater.Fwup do
 
     try do
       with :ok <- stream_firmware(port, fw_path, chunk_size),
-           :ok <- send_terminator(port),
-           :ok <- await_exit(port, progress, <<>>) do
-        :ok
+           :ok <- send_terminator(port) do
+        await_exit(port, progress, <<>>)
       end
     after
       safe_close(port)
@@ -226,14 +225,12 @@ defmodule NervesGithubUpdater.Fwup do
   # {:error, term()} contract instead of crashing the caller (mirrors
   # the safe_close/1 rescue+catch style below).
   defp port_command(port, data) do
-    try do
-      true = Port.command(port, data)
-      :ok
-    rescue
-      ArgumentError -> {:error, :fwup_port_closed}
-    catch
-      :error, :badarg -> {:error, :fwup_port_closed}
-    end
+    true = Port.command(port, data)
+    :ok
+  rescue
+    ArgumentError -> {:error, :fwup_port_closed}
+  catch
+    :error, :badarg -> {:error, :fwup_port_closed}
   end
 
   defp await_exit(port, progress, buffer) do
@@ -329,12 +326,10 @@ defmodule NervesGithubUpdater.Fwup do
   defp decode_payload(_other, err), do: {:unknown, err}
 
   defp safe_close(port) do
-    try do
-      Port.close(port)
-    rescue
-      ArgumentError -> :ok
-    catch
-      :error, :badarg -> :ok
-    end
+    Port.close(port)
+  rescue
+    ArgumentError -> :ok
+  catch
+    :error, :badarg -> :ok
   end
 end

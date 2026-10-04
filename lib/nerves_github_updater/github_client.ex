@@ -168,29 +168,7 @@ defmodule NervesGithubUpdater.GithubClient do
         {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
           File.close(fd)
           final_acc = Map.get(resp.private, :gh_acc, acc)
-
-          if final_acc.written > final_acc.limit do
-            File.rm(part_path)
-            {:error, {:download_too_large, final_acc.limit}}
-          else
-            progress_fn.({:downloading, 100})
-
-            case verify_sha256(final_acc.hash, expected_sha256) do
-              :ok ->
-                case File.rename(part_path, dest_path) do
-                  :ok ->
-                    :ok
-
-                  {:error, reason} ->
-                    File.rm(part_path)
-                    {:error, reason}
-                end
-
-              {:error, _reason} = error ->
-                File.rm(part_path)
-                error
-            end
-          end
+          finish_download(final_acc, part_path, dest_path, expected_sha256, progress_fn)
 
         {:ok, %Req.Response{status: status}} ->
           File.close(fd)
@@ -206,6 +184,29 @@ defmodule NervesGithubUpdater.GithubClient do
   end
 
   # -- Private --
+
+  # Called once the response body has been fully streamed to
+  # `part_path` (fd already closed): enforce the size cap, verify the
+  # SHA-256, then atomically move the file into place. Any failure
+  # deletes the partial file.
+  defp finish_download(%{written: written, limit: limit}, part_path, _dest, _sha, _progress)
+       when written > limit do
+    File.rm(part_path)
+    {:error, {:download_too_large, limit}}
+  end
+
+  defp finish_download(acc, part_path, dest_path, expected_sha256, progress_fn) do
+    progress_fn.({:downloading, 100})
+
+    with :ok <- verify_sha256(acc.hash, expected_sha256),
+         :ok <- File.rename(part_path, dest_path) do
+      :ok
+    else
+      {:error, _reason} = error ->
+        File.rm(part_path)
+        error
+    end
+  end
 
   defp stream_collector(initial_acc) do
     fn {:data, chunk}, {request, %Req.Response{private: private} = response} ->
