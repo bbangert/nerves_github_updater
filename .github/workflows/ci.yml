@@ -58,6 +58,10 @@ jobs:
       - name: Check for unused deps in mix.lock
         run: mix deps.unlock --check-unused
 
+      # Fails on retired packages and on EEF/GHSA security advisories.
+      - name: Audit dependencies
+        run: mix hex.audit
+
   dialyzer:
     name: Dialyzer
     runs-on: ubuntu-latest
