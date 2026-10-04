@@ -506,20 +506,8 @@ defmodule NervesGithubUpdater.Updater do
              {:ok, flashed_state} <- do_flash(downloading_state, opts, fw_path) do
           # The counter anchor only advances once the new firmware is
           # actually flashed — a failed flash must not move the
-          # rollback floor. The flash already succeeded and reboot
-          # must proceed either way, so a KV write failure here is
-          # log-only, not install-failing.
-          case kv_put.(@counter_key, Integer.to_string(manifest.counter)) do
-            :ok ->
-              :ok
-
-            other ->
-              Logger.error(
-                "Failed to persist firmware rollback counter (#{inspect(other)}); " <>
-                  "rollback protection may be stale until next successful install"
-              )
-          end
-
+          # rollback floor.
+          persist_counter(kv_put, manifest.counter)
           {:ok, flashed_state}
         end
       end
@@ -534,6 +522,21 @@ defmodule NervesGithubUpdater.Updater do
       {:error, reason} ->
         cleanup_partials([manifest_path, sig_path, fw_path])
         {:noreply, fail(state, "Install failed: #{format_error(reason)}", reason)}
+    end
+  end
+
+  # The flash already succeeded and reboot must proceed either way, so
+  # a KV write failure here is log-only, not install-failing.
+  defp persist_counter(kv_put, counter) do
+    case kv_put.(@counter_key, Integer.to_string(counter)) do
+      :ok ->
+        :ok
+
+      other ->
+        Logger.error(
+          "Failed to persist firmware rollback counter (#{inspect(other)}); " <>
+            "rollback protection may be stale until next successful install"
+        )
     end
   end
 
