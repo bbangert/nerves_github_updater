@@ -172,7 +172,7 @@ jobs:
       # Not a Phoenix app: sobelow skips the router checks and scans the
       # rest (file/traversal, crypto, config, etc.).
       - name: Run sobelow
-        run: mix sobelow --skip --exit --threshold medium
+        run: mix sobelow --private --skip --exit --threshold medium
 
   audit:
     name: Dependency audit
