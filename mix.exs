@@ -8,7 +8,7 @@ defmodule NervesGithubUpdater.MixProject do
     [
       app: :nerves_github_updater,
       version: @version,
-      elixir: "~> 1.18",
+      elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       elixirc_options: [warnings_as_errors: true],
       deps: deps(),
