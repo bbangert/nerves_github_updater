@@ -183,5 +183,8 @@ jobs:
       - name: Run argus
         run: mix argus --format json > argus.json
 
+      - name: Self-test argus baseline script
+        run: elixir scripts/argus_baseline.exs --self-test
+
       - name: Check argus findings against baseline
         run: elixir scripts/argus_baseline.exs argus.json .argus-baseline.exs
