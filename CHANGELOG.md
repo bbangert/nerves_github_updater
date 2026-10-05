@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.3.0] - 2026-10-05
+
+### Changed
+
+- **Requires Elixir 1.19.** The minimum Elixir version moves from 1.18
+  to 1.19, hence the minor bump. There are no API or behaviour changes.
+
+### Security
+
+- The development lockfile now pins `mint` 1.11.0, which fixes the
+  security advisories against earlier releases. `mint` arrives through
+  `req`/`finch`, so it is not constrained by this package; applications
+  should run `mix deps.update mint` to pick up the fix themselves.
+
+### Internal
+
+- Credo `--strict` refactors in `Fwup`, `GithubClient`, `Signature` and
+  `Updater` (extracted helpers, implicit `try`); no behaviour change.
+- CI now runs credo, dialyzer, sobelow, `mix hex.audit` and Argus
+  alongside the test suite.
+
 ## [0.2.0] - 2026-08-15
 
 ### Changed
