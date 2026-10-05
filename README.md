@@ -73,7 +73,7 @@ release-metadata API call, to lift the anonymous rate limit
 ```elixir
 def deps do
   [
-    {:nerves_github_updater, "~> 0.1"}
+    {:nerves_github_updater, "~> 0.3"}
   ]
 end
 ```
