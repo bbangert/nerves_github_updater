@@ -12,7 +12,7 @@ see the [README](../README.md); for the manifest wire format see
 # mix.exs
 def deps do
   [
-    {:nerves_github_updater, "~> 0.1"}
+    {:nerves_github_updater, "~> 0.3"}
   ]
 end
 ```
