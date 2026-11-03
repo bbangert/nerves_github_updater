@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.3.1] - 2026-11-03
+
+### Security
+
+- The development lockfile now pins `plug_crypto` 2.2.1, which fixes
+  EEF-CVE-2026-105963. `plug_crypto` is only a test-time dependency here
+  (through `plug`), so this package never ships it; applications that
+  use it should run `mix deps.update plug_crypto` themselves.
+
+### Changed
+
+- Dependency locks refreshed within existing requirements: `req` 0.7.5,
+  `nimble_options` 1.2.0, `phoenix_pubsub` 2.4.1 (optional), plus the
+  dev/test tools `sobelow` 0.18.1 and `argus_beam` 0.25.0. No API or
+  behaviour changes.
+- The getting-started guide now shows the current `~> 0.3` requirement.
+
+### Internal
+
+- CI: the Argus job no longer installs Souffle.
+
 ## [0.3.0] - 2026-10-05
 
 ### Changed
